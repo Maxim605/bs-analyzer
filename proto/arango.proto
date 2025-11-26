@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package arango;
+
+// Запрос на сохранение документа
+message SaveRequest {
+  string collection = 1;
+  map<string, string> fields = 2;
+}
+
+// Ответ на сохранение документа
+message SaveResponse {
+  bool success = 1;
+  string key = 2;
+  string error = 3;
+}
+
+// Запрос на получение документа
+message GetRequest {
+  string collection = 1;
+  string key = 2;
+}
+
+// Ответ на получение документа
+message GetResponse {
+  map<string, string> fields = 1;
+  string error = 2;
+}
+
+// Запрос на потоковое получение документов
+message StreamGetRequest {
+  string collection = 1;
+  repeated string keys = 2;
+}
+
+// Сервис для работы с ArangoDB
+service ArangoService {
+  // Синхронное сохранение документа
+  rpc Save(SaveRequest) returns (SaveResponse);
+  
+  // Синхронное получение документа
+  rpc Get(GetRequest) returns (GetResponse);
+  
+  // Потоковое получение документов (server streaming)
+  rpc StreamGet(StreamGetRequest) returns (stream GetResponse);
+  
+  // Потоковое сохранение документов (client streaming)
+  rpc StreamSave(stream SaveRequest) returns (SaveResponse);
+  
+  // Двунаправленный поток (bidirectional streaming)
+  rpc StreamBatch(stream SaveRequest) returns (stream SaveResponse);
+}
+
+
+
+
