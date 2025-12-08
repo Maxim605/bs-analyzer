@@ -33,3 +33,21 @@ class RedisTaskManager:
             return json.loads(data)
         return None
 
+    def get_task_result(self, task_id: str) -> dict | None:
+        """
+        Получает результат задачи по task_id.
+        Ожидает, что результат сохранен с ключом result:{task_id}
+        """
+        result_key = f"result:{task_id}"
+        data = self.client.get(result_key)
+        if data:
+            return json.loads(data)
+        return None
+
+    def save_task_result(self, task_id: str, result: Any, ttl: int = 3600) -> None:
+        """
+        Сохраняет результат задачи в Redis.
+        """
+        result_key = f"result:{task_id}"
+        self.client.set(result_key, json.dumps(result), ex=ttl)
+

@@ -85,3 +85,27 @@ class NetworkXGraphAnalysisService(GraphAnalysisService):
             
         return stats
 
+    def get_modularity(self, graph: Graph) -> float:
+        nx_graph = self._to_nx_graph(graph)
+        
+        # Группировка узлов по кластерам
+        communities = {}
+        for node in graph.nodes:
+            # Если кластер не задан, считаем каждого в отдельном (или 0, но лучше игнорировать или ошибку)
+            # Предполагаем, что кластеризация проведена
+            cluster_id = node.cluster.value if node.cluster else -1
+            if cluster_id not in communities:
+                communities[cluster_id] = set()
+            communities[cluster_id].add(node.node_id)
+            
+        community_list = list(communities.values())
+        
+        # Если только один кластер или кластеры не заданы (все -1), модулярность 0 (или не определена)
+        if len(community_list) < 2 and len(graph.nodes) > 1:
+             return 0.0
+
+        try:
+            return nx.community.modularity(nx_graph, community_list)
+        except Exception:
+            return 0.0
+

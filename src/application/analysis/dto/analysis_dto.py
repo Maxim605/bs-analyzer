@@ -22,3 +22,18 @@ class ChromaticNumberDTO(BaseModel):
 class GraphStatsDTO(BaseModel):
     stats: Dict[str, Any]
 
+class OptimalClusterRequestDTO(AnalysisRequestDTO):
+    min_k: int = Field(default=2, ge=2)
+    max_k: int = Field(default=10, ge=2)
+
+class EpochStatsDTO(BaseModel):
+    k: int
+    modularity: float
+    stats: Dict[str, Any]
+
+class OptimalClusterResponseDTO(BaseModel):
+    optimal_k: int
+    best_stats: Dict[str, Any]
+    clustered_graph: Any # ClusteredGraphDTO нельзя импортировать из-за цикла, используем Dict или GraphSourceDTO с кластерами
+    epoch_stats: List[EpochStatsDTO]
+

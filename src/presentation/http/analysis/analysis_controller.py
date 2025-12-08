@@ -1,7 +1,11 @@
 from __future__ import annotations
 import json
+import time
+import logging
 from fastapi import APIRouter, status, HTTPException, File, UploadFile, Form
 from typing import Union, Optional
+
+logger = logging.getLogger(__name__)
 
 from src.application.analysis.queries.analyze_graph import AnalyzeGraphHandler
 from src.application.analysis.dto.analysis_dto import (
@@ -10,7 +14,9 @@ from src.application.analysis.dto.analysis_dto import (
     LaplacianMatrixDTO,
     EigenvaluesDTO,
     ChromaticNumberDTO,
-    GraphStatsDTO
+    GraphStatsDTO,
+    OptimalClusterRequestDTO,
+    OptimalClusterResponseDTO
 )
 
 def create_analysis_router(
@@ -75,6 +81,106 @@ def create_analysis_router(
                 data['async_mode'] = False
         
         return AnalysisRequestDTO(**data)
+
+    async def _parse_optimal_request(
+        file: Optional[UploadFile] = File(None),
+        graph_json: Optional[str] = Form(None),
+        async_mode: Optional[bool] = Form(None),
+        min_k: int = Form(2),
+        max_k: int = Form(10)
+    ) -> OptimalClusterRequestDTO:
+        """
+        Парсит запрос для поиска оптимальных кластеров с поддержкой min_k и max_k.
+        """
+        # Используем базовый парсер для получения данных графа
+        base_dto = await _parse_request(file, graph_json, async_mode)
+        
+        # Получаем данные графа как словарь
+        graph_data = base_dto.graph
+        
+        # Формируем DTO для поиска оптимальных кластеров
+        return OptimalClusterRequestDTO(
+            graph=graph_data,
+            async_mode=base_dto.async_mode,
+            min_k=min_k,
+            max_k=max_k
+        )
+
+    @router.post(
+        "/optimal-clusters",
+        response_model=Union[OptimalClusterResponseDTO, str],
+        status_code=status.HTTP_200_OK
+    )
+    async def find_optimal_clusters(
+        file: Optional[UploadFile] = File(None),
+        graph_json: Optional[str] = Form(None),
+        async_mode: Optional[bool] = Form(None),
+        min_k: int = Form(2),
+        max_k: int = Form(10)
+    ):
+        """
+        Найти оптимальное количество кластеров (спектральная кластеризация).
+        Оценивает качество разбиения с помощью модулярности и возвращает статистики для каждой эпохи.
+        В async режиме возвращает task_id, результат можно получить через GET /analysis/optimal-clusters/{task_id}
+        """
+        request_start_time = time.time()
+        try:
+            logger.info(f"Received optimal clusters request: min_k={min_k}, max_k={max_k}, async_mode={async_mode}")
+            dto = await _parse_optimal_request(file, graph_json, async_mode, min_k, max_k)
+            result = analysis_handler.find_optimal_clusters(dto)
+            
+            request_time = time.time() - request_start_time
+            logger.info(
+                f"Optimal clusters request completed | "
+                f"Request processing time: {request_time:.2f}s | "
+                f"Result type: {type(result).__name__}"
+            )
+            
+            return result
+        except HTTPException:
+            request_time = time.time() - request_start_time
+            logger.warning(f"Optimal clusters request failed after {request_time:.2f}s")
+            raise
+        except Exception as e:
+            request_time = time.time() - request_start_time
+            logger.error(f"Optimal clusters request error after {request_time:.2f}s: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @router.get(
+        "/optimal-clusters/{task_id}",
+        response_model=OptimalClusterResponseDTO,
+        status_code=status.HTTP_200_OK
+    )
+    def get_optimal_clusters_result(task_id: str):
+        """
+        Получить результат задачи поиска оптимальных кластеров по task_id.
+        """
+        request_start_time = time.time()
+        try:
+            logger.info(f"Retrieving optimal clusters result for task_id: {task_id}")
+            result = analysis_handler.get_optimal_clusters_result(task_id)
+            if result is None:
+                request_time = time.time() - request_start_time
+                logger.warning(f"Task {task_id} not found (request time: {request_time:.2f}s)")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Task {task_id} not found or not completed yet"
+                )
+            
+            request_time = time.time() - request_start_time
+            logger.info(
+                f"Task result retrieved successfully | "
+                f"Task ID: {task_id} | "
+                f"Optimal k: {result.optimal_k} | "
+                f"Request time: {request_time:.2f}s"
+            )
+            return result
+        except HTTPException:
+            raise
+        except Exception as e:
+            request_time = time.time() - request_start_time
+            logger.error(f"Error retrieving task result for {task_id} after {request_time:.2f}s: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
 
     @router.post(
         "/adjacency-matrix",

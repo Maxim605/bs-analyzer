@@ -30,3 +30,8 @@ class GraphAnalysisService(ABC):
         """Возвращает основные характеристики: плотность, диаметр, среднюю степень и т.д."""
         pass
 
+    @abstractmethod
+    def get_modularity(self, graph: Graph) -> float:
+        """Возвращает модулярность разбиения графа (если кластеры заданы)."""
+        pass
+
