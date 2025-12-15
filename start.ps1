@@ -27,6 +27,21 @@ if ($isAdmin) {
 Write-Host "`nЗапуск uvicorn..." -ForegroundColor Yellow
 Write-Host "Настройки: 8 потоков, рекомендуется 40 GB ОЗУ`n" -ForegroundColor Cyan
 
+# Загрузка порта из .env файла
+$envFile = ".env"
+$port = "8000"
+if (Test-Path $envFile) {
+    $envContent = Get-Content $envFile
+    foreach ($line in $envContent) {
+        if ($line -match "^PORT=(.+)$") {
+            $port = $matches[1]
+            break
+        }
+    }
+}
+
+Write-Host "Порт приложения: $port" -ForegroundColor Cyan
+
 # Запуск uvicorn
-uvicorn src.main:app --reload
+uvicorn src.main:app --reload --port $port
 

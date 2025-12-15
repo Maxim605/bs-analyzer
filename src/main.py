@@ -6,9 +6,11 @@ import sys
 from datetime import datetime
 from fastapi import FastAPI
 
+from src.infrastructure.config import config
 from src.presentation.http.example.example_module import build_example_router
 from src.presentation.http.clusterizer.clusterizer_module import build_clusterizer_module
 from src.presentation.http.analysis.analysis_module import build_analysis_module
+from src.presentation.http.users.users_module import build_users_module
 
 # Оптимизация для максимального использования ресурсов CPU
 # Настройка переменных окружения для numpy/scipy/sklearn
@@ -57,6 +59,7 @@ app = FastAPI(title="Документация API", version="0.1.0")
 app.include_router(build_example_router())
 app.include_router(build_clusterizer_module())
 app.include_router(build_analysis_module())
+app.include_router(build_users_module())
 
 
 @app.get("/health")

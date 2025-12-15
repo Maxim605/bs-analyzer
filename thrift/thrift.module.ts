@@ -1,0 +1,75 @@
+import { Module, OnModuleInit, Inject, Global } from "@nestjs/common";
+import { Database } from "arangojs";
+import { ArangoModule } from "../arango/arango.module";
+import { ThriftArangoService } from "./services";
+import { ThriftController } from "./thrift.controller";
+
+const thrift = require("thrift");
+const path = require("path");
+
+@Global()
+@Module({
+  imports: [ArangoModule.forRoot()],
+  providers: [
+    ThriftArangoService,
+    {
+      provide: "THRIFT_SERVER",
+      useFactory: async (db: Database) => {
+        let arangoService: any;
+        try {
+          arangoService = require(path.join(
+            __dirname,
+            "gen-nodejs",
+            "ArangoService",
+          ));
+        } catch (e) {
+          throw new Error(
+            "Thrift generated service not found. Run 'npm run gen-thrift' or disable Thrift via settings.enableThrift=false.",
+          );
+        }
+        const handler = {
+          async save(req) {
+            try {
+              const collectionName = req.collection;
+              const doc = req.fields;
+              let col = db.collection(collectionName);
+              const exists = await col.exists();
+              if (!exists) {
+                if (doc._from && doc._to) {
+                  await db.createEdgeCollection(collectionName);
+                } else {
+                  await db.createCollection(collectionName);
+                }
+                col = db.collection(collectionName);
+              }
+              const res = await col.save(doc, { overwriteMode: "update" });
+              return { success: true, key: res._key };
+            } catch (e) {
+              return { success: false, error: e.message };
+            }
+          },
+          async get(req) {
+            try {
+              const col = db.collection(req.collection);
+              const doc = await col.document(req.key);
+              return { fields: doc };
+            } catch (e) {
+              return { error: e.message };
+            }
+          },
+        };
+        const server = thrift.createServer(arangoService, handler);
+        server.listen(9090);
+        return server;
+      },
+      inject: ["ARANGODB_CLIENT"],
+    },
+  ],
+  exports: [ThriftArangoService],
+  controllers: [ThriftController],
+})
+export class ThriftModule implements OnModuleInit {
+  onModuleInit() {
+    console.log("Thrift server started on port 9090");
+  }
+}

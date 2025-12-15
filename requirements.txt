@@ -9,3 +9,6 @@ networkx
 numpy
 scipy
 redis
+python-dotenv
+thriftpy2
+python-arango

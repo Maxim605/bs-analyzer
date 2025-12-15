@@ -6,11 +6,35 @@
 pip install -r requirements.txt
 ```
 
-### 2. Запуск сервера
+### 2. Настройка конфигурации
 
-```bash
-uvicorn src.main:app --reload
+Создайте файл `.env` в корне проекта со следующими параметрами:
+
+```env
+PORT=8000
+THRIFT_HOST=localhost
+THRIFT_PORT=9090
+ARANGO_URL=http://localhost:8529
+ARANGO_DATABASE=bs
+ARANGO_USERNAME=root
+ARANGO_PASSWORD=
+USERS_COLLECTION=users
+BATCH_SIZE=100
 ```
+
+### 3. Запуск сервера
+
+**Windows (PowerShell):**
+```powershell
+.\start.ps1
+```
+
+**Или напрямую:**
+```bash
+uvicorn src.main:app --reload --port 8000
+```
+
+Порт можно изменить в файле `.env` (переменная `PORT`).
 
 ### 3. Проверка работы
 
@@ -54,6 +78,9 @@ curl http://localhost:8000/health
 - `fastapi` - веб-фреймворк
 - `uvicorn` - ASGI сервер
 - `pydantic` - валидация данных
+- `python-dotenv` - загрузка конфигурации из .env
+- `thriftpy2` - Thrift клиент для работы с ArangoDB
+- `python-arango` - прямой клиент для работы с ArangoDB
 
 
 ## Документация
