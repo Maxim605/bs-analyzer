@@ -3,6 +3,8 @@ from dataclasses import dataclass
 import logging
 import time
 from typing import Any, Optional, List
+import numpy as np
+from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score
 
 from src.domain.clusterizer.entities.graph import Graph, GraphNode, GraphLink
 from src.domain.analysis.services.graph_analysis_service import GraphAnalysisService
@@ -17,7 +19,9 @@ from src.application.analysis.dto.analysis_dto import (
     GraphStatsDTO,
     OptimalClusterRequestDTO,
     OptimalClusterResponseDTO,
-    EpochStatsDTO
+    EpochStatsDTO,
+    LibraryOptimalClusterResponseDTO,
+    LibraryMetricDTO
 )
 from src.application.clusterizer.dto.graph_dto import NodeDTO, LinkDTO
 
@@ -146,6 +150,166 @@ class AnalyzeGraphHandler:
             best_stats=best_stats,
             clustered_graph=best_graph_snapshot,
             epoch_stats=epoch_stats
+        )
+
+    def find_optimal_clusters_library(self, dto: OptimalClusterRequestDTO) -> LibraryOptimalClusterResponseDTO | str:
+        """
+        Находит оптимальное количество кластеров используя библиотечные метрики:
+        - Silhouette Score (чем выше, тем лучше)
+        - Calinski-Harabasz Index (чем выше, тем лучше)
+        - Davies-Bouldin Index (чем ниже, тем лучше)
+        """
+        if dto.async_mode:
+            return self._handle_async(dto, 'optimal_clusters_library')
+        
+        if not self.clustering_strategy:
+            raise ValueError("Clustering strategy is not configured in AnalyzeGraphHandler")
+
+        start_time = time.time()
+        graph = self._create_graph(dto)
+        
+        # Получаем матрицу смежности для вычисления метрик
+        node_ids, edges = graph.to_adjacency_matrix_data()
+        import networkx as nx
+        from scipy import sparse
+        
+        nx_graph = nx.Graph()
+        nx_graph.add_nodes_from(node_ids)
+        nx_graph.add_edges_from(edges)
+        adj_matrix = nx.to_scipy_sparse_array(nx_graph, nodelist=node_ids, format='csr')
+        
+        # Преобразуем в плотную матрицу для метрик (если граф не слишком большой)
+        # Для больших графов используем разреженную матрицу
+        if len(node_ids) > 10000:
+            # Для больших графов используем только silhouette с разреженной матрицей
+            use_sparse = True
+        else:
+            use_sparse = False
+            adj_matrix_dense = adj_matrix.toarray()
+        
+        metrics_list = []
+        best_silhouette = -1.0
+        best_calinski = -1.0
+        best_davies = float('inf')
+        best_k_silhouette = dto.min_k
+        best_k_calinski = dto.min_k
+        best_k_davies = dto.min_k
+        best_labels = None
+        best_k = dto.min_k
+
+        max_k = min(dto.max_k, len(graph.nodes))
+        min_k = min(dto.min_k, max_k)
+        
+        total_iterations = max_k - min_k + 1
+        logger.info(f"Starting library-based optimal clusters search: min_k={min_k}, max_k={max_k}, total_iterations={total_iterations}, nodes={len(graph.nodes)}")
+
+        for iteration, k in enumerate(range(min_k, max_k + 1), start=1):
+            iteration_start = time.time()
+            
+            # Выполняем кластеризацию
+            labels = self.clustering_strategy.clusterize(graph, n_clusters=k)
+            graph.assign_clusters(labels)
+            
+            # Преобразуем labels в массив для метрик
+            labels_array = np.array([labels[node_id] for node_id in node_ids])
+            
+            # Вычисляем метрики
+            try:
+                if use_sparse:
+                    # Для больших графов используем только silhouette
+                    silhouette = silhouette_score(adj_matrix, labels_array, metric='precomputed')
+                    calinski = 0.0  # Не вычисляем для больших графов
+                    davies = float('inf')  # Не вычисляем для больших графов
+                else:
+                    silhouette = silhouette_score(adj_matrix_dense, labels_array, metric='precomputed')
+                    calinski = calinski_harabasz_score(adj_matrix_dense, labels_array)
+                    davies = davies_bouldin_score(adj_matrix_dense, labels_array)
+                
+                metrics_list.append(LibraryMetricDTO(
+                    k=k,
+                    silhouette_score=silhouette,
+                    calinski_harabasz_score=calinski,
+                    davies_bouldin_score=davies
+                ))
+                
+                # Обновляем лучшие результаты
+                if silhouette > best_silhouette:
+                    best_silhouette = silhouette
+                    best_k_silhouette = k
+                    # По умолчанию используем silhouette как основной метод
+                    best_k = k
+                    best_labels = labels.copy()
+                
+                if calinski > best_calinski:
+                    best_calinski = calinski
+                    best_k_calinski = k
+                
+                if davies < best_davies:
+                    best_davies = davies
+                    best_k_davies = k
+                
+            except Exception as e:
+                logger.warning(f"Error computing metrics for k={k}: {e}")
+                # Добавляем нулевые метрики при ошибке
+                metrics_list.append(LibraryMetricDTO(
+                    k=k,
+                    silhouette_score=0.0,
+                    calinski_harabasz_score=0.0,
+                    davies_bouldin_score=float('inf')
+                ))
+            
+            # Логирование прогресса
+            progress_percent = (iteration / total_iterations) * 100
+            iteration_time = time.time() - iteration_start
+            elapsed_time = time.time() - start_time
+            
+            logger.info(
+                f"Progress: {progress_percent:.1f}% | "
+                f"Iteration {iteration}/{total_iterations} (k={k}) | "
+                f"Silhouette: {metrics_list[-1].silhouette_score:.4f} | "
+                f"Iteration time: {iteration_time:.2f}s | "
+                f"Total elapsed: {elapsed_time:.2f}s"
+            )
+        
+        # Определяем оптимальный k на основе silhouette (основной метод)
+        optimal_k = best_k_silhouette
+        optimal_score = best_silhouette
+        method = "silhouette"
+        
+        # Создаем кластеризованный граф для лучшего результата
+        if best_labels:
+            graph.assign_clusters(best_labels)
+            response_nodes = [
+                NodeDTO(
+                    id=n.node_id,
+                    name=n.name,
+                    index=n.index,
+                    cluster=n.cluster.value if n.cluster else None
+                ) for n in graph.nodes
+            ]
+            response_links = [LinkDTO(source=l.source, target=l.target) for l in graph.links]
+            clustered_graph = {
+                'nodes': [n.model_dump() for n in response_nodes],
+                'links': [l.model_dump() for l in response_links]
+            }
+        else:
+            clustered_graph = {'nodes': [], 'links': []}
+        
+        total_time = time.time() - start_time
+        logger.info(
+            f"Library-based optimal clusters search completed | "
+            f"Optimal k (silhouette): {best_k_silhouette} (score: {best_silhouette:.4f}) | "
+            f"Optimal k (calinski): {best_k_calinski} (score: {best_calinski:.4f}) | "
+            f"Optimal k (davies): {best_k_davies} (score: {best_davies:.4f}) | "
+            f"Total processing time: {total_time:.2f}s"
+        )
+        
+        return LibraryOptimalClusterResponseDTO(
+            optimal_k=optimal_k,
+            method=method,
+            optimal_score=optimal_score,
+            clustered_graph=clustered_graph,
+            metrics=metrics_list
         )
 
     def get_optimal_clusters_result(self, task_id: str) -> OptimalClusterResponseDTO | None:

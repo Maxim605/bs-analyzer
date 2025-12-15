@@ -16,7 +16,8 @@ from src.application.analysis.dto.analysis_dto import (
     ChromaticNumberDTO,
     GraphStatsDTO,
     OptimalClusterRequestDTO,
-    OptimalClusterResponseDTO
+    OptimalClusterResponseDTO,
+    LibraryOptimalClusterResponseDTO
 )
 
 def create_analysis_router(
@@ -144,6 +145,49 @@ def create_analysis_router(
         except Exception as e:
             request_time = time.time() - request_start_time
             logger.error(f"Optimal clusters request error after {request_time:.2f}s: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @router.post(
+        "/optimal-clusters-library",
+        response_model=Union[LibraryOptimalClusterResponseDTO, str],
+        status_code=status.HTTP_200_OK
+    )
+    async def find_optimal_clusters_library(
+        file: Optional[UploadFile] = File(None),
+        graph_json: Optional[str] = Form(None),
+        async_mode: Optional[bool] = Form(None),
+        min_k: int = Form(2),
+        max_k: int = Form(10)
+    ):
+        """
+        Найти оптимальное количество кластеров используя библиотечные метрики scikit-learn:
+        - Silhouette Score (чем выше, тем лучше) - основной метод
+        - Calinski-Harabasz Index (чем выше, тем лучше)
+        - Davies-Bouldin Index (чем ниже, тем лучше)
+        
+        Возвращает оптимальное k на основе Silhouette Score и все метрики для каждого k.
+        """
+        request_start_time = time.time()
+        try:
+            logger.info(f"Received library-based optimal clusters request: min_k={min_k}, max_k={max_k}, async_mode={async_mode}")
+            dto = await _parse_optimal_request(file, graph_json, async_mode, min_k, max_k)
+            result = analysis_handler.find_optimal_clusters_library(dto)
+            
+            request_time = time.time() - request_start_time
+            logger.info(
+                f"Library-based optimal clusters request completed | "
+                f"Request processing time: {request_time:.2f}s | "
+                f"Result type: {type(result).__name__}"
+            )
+            
+            return result
+        except HTTPException:
+            request_time = time.time() - request_start_time
+            logger.warning(f"Library-based optimal clusters request failed after {request_time:.2f}s")
+            raise
+        except Exception as e:
+            request_time = time.time() - request_start_time
+            logger.error(f"Library-based optimal clusters request error after {request_time:.2f}s: {str(e)}")
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get(

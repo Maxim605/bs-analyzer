@@ -37,3 +37,16 @@ class OptimalClusterResponseDTO(BaseModel):
     clustered_graph: Any # ClusteredGraphDTO нельзя импортировать из-за цикла, используем Dict или GraphSourceDTO с кластерами
     epoch_stats: List[EpochStatsDTO]
 
+class LibraryMetricDTO(BaseModel):
+    k: int
+    silhouette_score: float
+    calinski_harabasz_score: float
+    davies_bouldin_score: float
+
+class LibraryOptimalClusterResponseDTO(BaseModel):
+    optimal_k: int
+    method: str  # "silhouette", "calinski_harabasz", "davies_bouldin"
+    optimal_score: float
+    clustered_graph: Any
+    metrics: List[LibraryMetricDTO]
+
