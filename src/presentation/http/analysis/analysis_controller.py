@@ -3,6 +3,7 @@ import json
 import time
 import logging
 from fastapi import APIRouter, status, HTTPException, File, UploadFile, Form
+from fastapi.responses import Response
 from typing import Union, Optional
 
 logger = logging.getLogger(__name__)
@@ -247,18 +248,33 @@ def create_analysis_router(
 
     @router.post(
         "/laplacian-matrix",
-        response_model=Union[LaplacianMatrixDTO, str],
         status_code=status.HTTP_200_OK
     )
     async def get_laplacian_matrix(
         file: Optional[UploadFile] = File(None),
         graph_json: Optional[str] = Form(None),
-        async_mode: Optional[bool] = Form(None)
+        async_mode: Optional[bool] = Form(False)
     ):
-        """Получить матрицу Лапласа графа."""
+        """
+        Получить матрицу Лапласа графа в формате Excel.
+        В Excel файле id вершин указаны в заголовках строк и столбцов.
+        """
         try:
             dto = await _parse_request(file, graph_json, async_mode)
-            return analysis_handler.get_laplacian_matrix(dto)
+            result = analysis_handler.get_laplacian_matrix(dto)
+            
+            # Если async_mode, возвращаем task_id как строку
+            if isinstance(result, str):
+                return result
+            
+            # Иначе возвращаем Excel файл
+            return Response(
+                content=result,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={
+                    "Content-Disposition": "attachment; filename=laplacian_matrix.xlsx"
+                }
+            )
         except HTTPException:
             raise
         except Exception as e:

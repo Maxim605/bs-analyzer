@@ -12,3 +12,4 @@ redis
 python-dotenv
 thriftpy2
 python-arango
+openpyxl

@@ -3,8 +3,11 @@ from dataclasses import dataclass
 import logging
 import time
 from typing import Any, Optional, List
+from io import BytesIO
 import numpy as np
 from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment
 
 from src.domain.clusterizer.entities.graph import Graph, GraphNode, GraphLink
 from src.domain.analysis.services.graph_analysis_service import GraphAnalysisService
@@ -334,13 +337,62 @@ class AnalyzeGraphHandler:
         matrix = self.analysis_service.get_adjacency_matrix(graph)
         return AdjacencyMatrixDTO(matrix=matrix)
 
-    def get_laplacian_matrix(self, dto: AnalysisRequestDTO) -> LaplacianMatrixDTO | str:
+    def get_laplacian_matrix(self, dto: AnalysisRequestDTO) -> str | bytes:
+        """
+        Получает матрицу Лапласа и возвращает Excel файл.
+        Если async_mode=True, возвращает task_id (str).
+        Иначе возвращает Excel файл в виде bytes.
+        """
         if dto.async_mode:
             return self._handle_async(dto, 'laplacian_matrix')
 
         graph = self._create_graph(dto)
         matrix = self.analysis_service.get_laplacian_matrix(graph)
-        return LaplacianMatrixDTO(matrix=matrix)
+        
+        # Получаем id вершин в том же порядке, что и матрица
+        node_ids, _ = graph.to_adjacency_matrix_data()
+        
+        # Создаем Excel файл в памяти
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Laplacian Matrix"
+        
+        # Стили для заголовков
+        header_font = Font(bold=True)
+        header_alignment = Alignment(horizontal='center', vertical='center')
+        
+        # Заполняем первую ячейку (пустая для угла)
+        ws.cell(row=1, column=1, value="")
+        
+        # Заполняем заголовки строк (id вершин в первом столбце)
+        for i, node_id in enumerate(node_ids, start=2):
+            cell = ws.cell(row=i, column=1, value=node_id)
+            cell.font = header_font
+            cell.alignment = header_alignment
+        
+        # Заполняем заголовки столбцов (id вершин в первой строке)
+        for j, node_id in enumerate(node_ids, start=2):
+            cell = ws.cell(row=1, column=j, value=node_id)
+            cell.font = header_font
+            cell.alignment = header_alignment
+        
+        # Заполняем матрицу
+        for i, row in enumerate(matrix, start=2):
+            for j, value in enumerate(row, start=2):
+                ws.cell(row=i, column=j, value=value)
+        
+        # Автоматически подгоняем ширину столбцов
+        ws.column_dimensions['A'].width = max(len(str(node_id)) for node_id in node_ids) + 2
+        for j, node_id in enumerate(node_ids, start=2):
+            col_letter = ws.cell(row=1, column=j).column_letter
+            ws.column_dimensions[col_letter].width = max(len(str(node_id)), 10)
+        
+        # Сохраняем в BytesIO
+        excel_buffer = BytesIO()
+        wb.save(excel_buffer)
+        excel_buffer.seek(0)
+        
+        return excel_buffer.getvalue()
 
     def get_eigenvalues(self, dto: AnalysisRequestDTO) -> EigenvaluesDTO | str:
         if dto.async_mode:
