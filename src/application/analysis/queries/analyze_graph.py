@@ -73,7 +73,8 @@ class AnalyzeGraphHandler:
         
         best_k = dto.min_k
         best_modularity = -1.0
-        best_graph_snapshot = None
+        best_nodes = None
+        best_links = None
         best_stats = {}
 
         # Если граф очень маленький, корректируем max_k
@@ -118,7 +119,7 @@ class AnalyzeGraphHandler:
                 best_stats = stats
                 
                 # Создаем snapshot графа для лучшего результата
-                response_nodes = [
+                best_nodes = [
                     NodeDTO(
                         id=n.node_id,
                         name=n.name,
@@ -126,16 +127,13 @@ class AnalyzeGraphHandler:
                         cluster=n.cluster.value if n.cluster else None
                     ) for n in graph.nodes
                 ]
-                response_links = [LinkDTO(source=l.source, target=l.target) for l in graph.links]
-                best_graph_snapshot = {
-                    'nodes': [n.model_dump() for n in response_nodes],
-                    'links': [l.model_dump() for l in response_links]
-                }
+                best_links = [LinkDTO(source=l.source, target=l.target) for l in graph.links]
                 logger.info(f"New best result found: k={best_k}, modularity={best_modularity:.4f}")
 
-        if best_graph_snapshot is None:
+        if best_nodes is None or best_links is None:
              # Fallback если цикл не выполнился или что-то пошло не так
-             best_graph_snapshot = {'nodes': [], 'links': []}
+             best_nodes = []
+             best_links = []
 
         total_time = time.time() - start_time
         logger.info(
@@ -148,7 +146,8 @@ class AnalyzeGraphHandler:
         return OptimalClusterResponseDTO(
             optimal_k=best_k,
             best_stats=best_stats,
-            clustered_graph=best_graph_snapshot,
+            nodes=best_nodes,
+            links=best_links,
             epoch_stats=epoch_stats
         )
 

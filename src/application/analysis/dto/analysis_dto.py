@@ -1,7 +1,7 @@
 from __future__ import annotations
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
-from src.application.clusterizer.dto.graph_dto import GraphSourceDTO
+from src.application.clusterizer.dto.graph_dto import GraphSourceDTO, NodeDTO, LinkDTO
 
 class AnalysisRequestDTO(BaseModel):
     graph: GraphSourceDTO
@@ -34,7 +34,8 @@ class EpochStatsDTO(BaseModel):
 class OptimalClusterResponseDTO(BaseModel):
     optimal_k: int
     best_stats: Dict[str, Any]
-    clustered_graph: Any # ClusteredGraphDTO нельзя импортировать из-за цикла, используем Dict или GraphSourceDTO с кластерами
+    nodes: List[NodeDTO]
+    links: List[LinkDTO]
     epoch_stats: List[EpochStatsDTO]
 
 class LibraryMetricDTO(BaseModel):

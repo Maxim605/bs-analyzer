@@ -43,6 +43,8 @@ uvicorn src.main:app --reload --port 8000
 - **API endpoints**:
   - `POST /example` - Сохранить пример
   - `GET /example` - Получить последний пример
+  - `POST /users/batch` - Получить пользователей по списку ID
+  - `POST /users/metrics` - Рассчитать метрики по данным пользователей
 
 ## Тестирование API
 
