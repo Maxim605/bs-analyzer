@@ -354,6 +354,174 @@ def create_analysis_router(
             logger.error(f"Error computing eigenvalues: {str(e)}")
             raise HTTPException(status_code=500, detail=str(e))
 
+    @router.post(
+        "/eigenvectors",
+        status_code=status.HTTP_200_OK
+    )
+    async def get_eigenvectors(
+        laplacian_matrix_file: Optional[UploadFile] = File(None),
+        async_mode: Optional[bool] = Form(False),
+        sort: Optional[str] = Form("+")
+    ):
+        """
+        Получить собственные векторы из матрицы Лапласа в формате Excel.
+        
+        Принимает xlsx файл с матрицей Лапласа (результат /analysis/laplacian-matrix).
+        Возвращает xlsx файл с собственными векторами.
+        
+        **Применение в спектральной кластеризации:**
+        Собственные векторы матрицы Лапласа используются для построения спектрального вложения (spectral embedding).
+        Первые k собственных векторов (соответствующих наименьшим собственным числам) формируют низкоразмерное 
+        представление вершин графа, в котором кластеры становятся более разделимыми. Это позволяет применять 
+        стандартные алгоритмы кластеризации (например, k-means) в этом новом пространстве для получения 
+        более качественных результатов, чем при работе напрямую с исходным графом.
+        
+        Каждый столбец в результате представляет один собственный вектор, упорядоченный по возрастанию 
+        соответствующих собственных чисел. Первые векторы (v_1, v_2, ..., v_k) обычно используются для 
+        спектральной кластеризации, так как они соответствуют глобальной структуре графа.
+        
+        Перед вычислением проверяет, что матрица симметричная и сумма всех элементов равна 0.
+        
+        Параметры:
+        - sort: режим сортировки ("-" для убывания, "+" для возрастания). По умолчанию "+" (рекомендуется для спектральной кластеризации).
+        """
+        try:
+            if async_mode:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Async режим не поддерживается для Excel файлов"
+                )
+            
+            if laplacian_matrix_file is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Необходимо передать xlsx файл с матрицей Лапласа"
+                )
+            
+            # Проверяем тип файла
+            if not laplacian_matrix_file.filename.endswith('.xlsx'):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Файл должен быть в формате .xlsx"
+                )
+            
+            # Проверяем параметр сортировки
+            if sort not in ["-", "+"]:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Параметр sort должен быть '-' (убывание) или '+' (возрастание)"
+                )
+            
+            # Читаем содержимое файла
+            excel_bytes = await laplacian_matrix_file.read()
+            
+            # Вычисляем собственные векторы
+            result = analysis_handler.get_eigenvectors_from_excel(excel_bytes, sort=sort)
+            
+            # Возвращаем Excel файл
+            return Response(
+                content=result,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={
+                    "Content-Disposition": "attachment; filename=eigenvectors.xlsx"
+                }
+            )
+        except HTTPException:
+            raise
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except Exception as e:
+            logger.error(f"Error computing eigenvectors: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @router.post(
+        "/eigengaps",
+        status_code=status.HTTP_200_OK
+    )
+    async def get_eigengaps(
+        laplacian_matrix_file: Optional[UploadFile] = File(None),
+        async_mode: Optional[bool] = Form(False),
+        sort: Optional[str] = Form("+")
+    ):
+        """
+        Получить eigengaps (разности между соседними собственными числами) из матрицы Лапласа в формате Excel.
+        
+        Принимает xlsx файл с матрицей Лапласа (результат /analysis/laplacian-matrix).
+        Возвращает xlsx файл с eigengaps: g_i = λ_{i+1} - λ_i.
+        
+        **Применение в спектральной кластеризации:**
+        Eigengaps используются для определения оптимального количества кластеров k. Большие разности между 
+        соседними собственными числами указывают на естественные границы между кластерами. 
+        
+        Метод основан на наблюдении, что если граф имеет k хорошо разделённых кластеров, то первые k 
+        собственных чисел будут малыми (близкими к нулю), а разность между λ_k и λ_{k+1} будет значительной.
+        Таким образом, анализ eigengaps позволяет автоматически выбрать количество кластеров без необходимости 
+        перебора различных значений k и оценки качества кластеризации.
+        
+        В результате для каждого gap указывается:
+        - Gap Index: индекс разности (i)
+        - λ_i: i-е собственное число
+        - λ_{i+1}: (i+1)-е собственное число
+        - Gap: разность λ_{i+1} - λ_i
+        
+        Значимые gaps (большие значения) обычно соответствуют оптимальному количеству кластеров. 
+        Рекомендуется искать локальные максимумы в последовательности gaps, особенно среди первых 
+        10-50% собственных чисел (низкочастотная часть спектра).
+        
+        Перед вычислением проверяет, что матрица симметричная и сумма всех элементов равна 0.
+        
+        Параметры:
+        - sort: режим сортировки ("-" для убывания, "+" для возрастания). По умолчанию "+" (рекомендуется для анализа gaps).
+        """
+        try:
+            if async_mode:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Async режим не поддерживается для Excel файлов"
+                )
+            
+            if laplacian_matrix_file is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Необходимо передать xlsx файл с матрицей Лапласа"
+                )
+            
+            # Проверяем тип файла
+            if not laplacian_matrix_file.filename.endswith('.xlsx'):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Файл должен быть в формате .xlsx"
+                )
+            
+            # Проверяем параметр сортировки
+            if sort not in ["-", "+"]:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Параметр sort должен быть '-' (убывание) или '+' (возрастание)"
+                )
+            
+            # Читаем содержимое файла
+            excel_bytes = await laplacian_matrix_file.read()
+            
+            # Вычисляем eigengaps
+            result = analysis_handler.get_eigengaps_from_excel(excel_bytes, sort=sort)
+            
+            # Возвращаем Excel файл
+            return Response(
+                content=result,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={
+                    "Content-Disposition": "attachment; filename=eigengaps.xlsx"
+                }
+            )
+        except HTTPException:
+            raise
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except Exception as e:
+            logger.error(f"Error computing eigengaps: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
+
     @router.get(
         "/laplacian-analysis/algorithm",
         status_code=status.HTTP_200_OK

@@ -553,6 +553,155 @@ class AnalyzeGraphHandler:
         
         return excel_buffer.getvalue()
 
+    def get_eigenvectors_from_excel(self, excel_bytes: bytes, sort: str = "+") -> bytes:
+        """
+        Вычисляет собственные векторы из Excel файла с матрицей Лапласа.
+        
+        Параметры:
+        - sort: режим сортировки собственных чисел ("-" для убывания, "+" для возрастания). 
+                По умолчанию "+" (по возрастанию, как в спектральной кластеризации).
+        """
+        # Парсим Excel файл
+        matrix, node_ids = self._parse_laplacian_matrix_from_excel(excel_bytes)
+        
+        # Проверяем матрицу
+        self._validate_laplacian_matrix(matrix)
+        
+        # Вычисляем собственные числа и векторы
+        import numpy as np
+        np_matrix = np.array(matrix, dtype=float)
+        
+        # Вычисляем все собственные числа и векторы
+        eigenvalues, eigenvectors = np.linalg.eigh(np_matrix)
+        
+        # Сортируем в зависимости от параметра sort
+        if sort == "-":
+            # По убыванию
+            idx = np.argsort(eigenvalues)[::-1]
+        elif sort == "+":
+            # По возрастанию
+            idx = np.argsort(eigenvalues)
+        else:
+            # По умолчанию по возрастанию
+            idx = np.argsort(eigenvalues)
+        
+        eigenvalues_sorted = eigenvalues[idx]
+        eigenvectors_sorted = eigenvectors[:, idx]
+        
+        # Создаем Excel файл с результатами
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Eigenvectors"
+        
+        # Стили для заголовков
+        header_font = Font(bold=True)
+        header_alignment = Alignment(horizontal='center', vertical='center')
+        
+        # Заголовки: первая строка - индексы векторов и собственные числа
+        ws.cell(row=1, column=1, value="Node ID").font = header_font
+        ws.cell(row=1, column=1).alignment = header_alignment
+        
+        # Заголовки для каждого собственного вектора
+        for i in range(len(eigenvalues_sorted)):
+            col = i + 2
+            ws.cell(row=1, column=col, value=f"v_{i+1} (λ={eigenvalues_sorted[i]:.6f})").font = header_font
+            ws.cell(row=1, column=col).alignment = header_alignment
+        
+        # Заполняем данные: каждая строка - вершина, каждый столбец - компонента вектора
+        for node_row_idx, node_id in enumerate(node_ids):
+            excel_row = node_row_idx + 2  # Excel строки начинаются с 2 (1 - заголовок)
+            ws.cell(row=excel_row, column=1, value=node_id)
+            for eigenvector_idx in range(len(eigenvalues_sorted)):
+                excel_col = eigenvector_idx + 2  # Excel столбцы начинаются с 2 (1 - Node ID)
+                ws.cell(row=excel_row, column=excel_col, value=eigenvectors_sorted[node_row_idx, eigenvector_idx])
+        
+        # Автоматически подгоняем ширину столбцов
+        ws.column_dimensions['A'].width = max(len(str(node_id)) for node_id in node_ids) + 2
+        for col_idx in range(2, len(eigenvalues_sorted) + 2):
+            col_letter = ws.cell(row=1, column=col_idx).column_letter
+            ws.column_dimensions[col_letter].width = 15
+        
+        # Сохраняем в BytesIO
+        excel_buffer = BytesIO()
+        wb.save(excel_buffer)
+        excel_buffer.seek(0)
+        
+        return excel_buffer.getvalue()
+
+    def get_eigengaps_from_excel(self, excel_bytes: bytes, sort: str = "+") -> bytes:
+        """
+        Вычисляет eigengaps (разности между соседними собственными числами) из Excel файла с матрицей Лапласа.
+        
+        Параметры:
+        - sort: режим сортировки собственных чисел ("-" для убывания, "+" для возрастания). 
+                По умолчанию "+" (по возрастанию, как в спектральной кластеризации).
+        """
+        # Парсим Excel файл
+        matrix, node_ids = self._parse_laplacian_matrix_from_excel(excel_bytes)
+        
+        # Проверяем матрицу
+        self._validate_laplacian_matrix(matrix)
+        
+        # Вычисляем собственные числа
+        import numpy as np
+        np_matrix = np.array(matrix, dtype=float)
+        
+        # Вычисляем все собственные числа
+        eigenvalues = np.linalg.eigvalsh(np_matrix)
+        
+        # Сортируем в зависимости от параметра sort
+        if sort == "-":
+            # По убыванию
+            eigenvalues = sorted(eigenvalues, reverse=True)
+        elif sort == "+":
+            # По возрастанию
+            eigenvalues = sorted(eigenvalues, reverse=False)
+        else:
+            # По умолчанию по возрастанию
+            eigenvalues = sorted(eigenvalues, reverse=False)
+        
+        # Вычисляем eigengaps: g_i = λ_{i+1} - λ_i
+        eigengaps = np.diff(eigenvalues)
+        
+        # Создаем Excel файл с результатами
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Eigengaps"
+        
+        # Стили для заголовков
+        header_font = Font(bold=True)
+        header_alignment = Alignment(horizontal='center', vertical='center')
+        
+        # Заголовки
+        ws.cell(row=1, column=1, value="Gap Index").font = header_font
+        ws.cell(row=1, column=1).alignment = header_alignment
+        ws.cell(row=1, column=2, value="λ_i").font = header_font
+        ws.cell(row=1, column=2).alignment = header_alignment
+        ws.cell(row=1, column=3, value="λ_{i+1}").font = header_font
+        ws.cell(row=1, column=3).alignment = header_alignment
+        ws.cell(row=1, column=4, value="Gap (λ_{i+1} - λ_i)").font = header_font
+        ws.cell(row=1, column=4).alignment = header_alignment
+        
+        # Заполняем eigengaps
+        for i, gap_value in enumerate(eigengaps, start=2):
+            ws.cell(row=i, column=1, value=i - 1)  # Gap index
+            ws.cell(row=i, column=2, value=eigenvalues[i - 2])  # λ_i
+            ws.cell(row=i, column=3, value=eigenvalues[i - 1])  # λ_{i+1}
+            ws.cell(row=i, column=4, value=gap_value)  # Gap
+        
+        # Автоматически подгоняем ширину столбцов
+        ws.column_dimensions['A'].width = 12
+        ws.column_dimensions['B'].width = 15
+        ws.column_dimensions['C'].width = 15
+        ws.column_dimensions['D'].width = 20
+        
+        # Сохраняем в BytesIO
+        excel_buffer = BytesIO()
+        wb.save(excel_buffer)
+        excel_buffer.seek(0)
+        
+        return excel_buffer.getvalue()
+
     def get_chromatic_number(self, dto: AnalysisRequestDTO) -> ChromaticNumberDTO | str:
         if dto.async_mode:
             return self._handle_async(dto, 'chromatic_number')
