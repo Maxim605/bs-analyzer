@@ -90,9 +90,11 @@ def compute_eigengaps(
 ) -> List[EigengapDTO]:
     """
     Вычисляет eigengaps с оценкой значимости.
+    
+    Eigengaps - это разности между соседними собственными числами: g_i = λ_{i+1} - λ_i.
+    Большие gaps указывают на возможные границы между кластерами.
     """
     gaps = compute_eigengaps_raw(eigenvalues)
-    median_gap = float(np.median(gaps)) if len(gaps) > 0 else 0.0
     
     # Ограничиваем количество gaps для анализа
     n_search = min(
@@ -101,22 +103,53 @@ def compute_eigengaps(
         len(gaps)
     )
     
+    # Вычисляем медиану только для релевантных gaps (исключаем нулевые/очень маленькие)
+    # Это предотвращает огромные значения gap_ratio_to_median
+    relevant_gaps = gaps[:n_search]
+    # Исключаем gaps, которые численно равны нулю (с учётом погрешности)
+    non_zero_gaps = relevant_gaps[relevant_gaps > params.zero_tol]
+    
+    if len(non_zero_gaps) > 0:
+        median_gap = float(np.median(non_zero_gaps))
+    else:
+        # Если все gaps нулевые, используем медиану всех gaps
+        median_gap = float(np.median(gaps)) if len(gaps) > 0 else 0.0
+    
+    # Если медиана всё ещё очень маленькая (близка к нулю), используем среднее значение
+    # для более устойчивой оценки
+    if median_gap < params.zero_tol:
+        mean_gap = float(np.mean(relevant_gaps[relevant_gaps > params.zero_tol])) if len(non_zero_gaps) > 0 else 0.0
+        if mean_gap > params.zero_tol:
+            median_gap = mean_gap
+    
     result = []
     for i in range(n_search):
         gap_value = float(gaps[i])
         
         # Проверяем значимость по нескольким критериям
-        is_significant_by_factor = gap_value > params.gap_factor * median_gap if median_gap > 0 else False
+        is_significant_by_factor = False
+        if median_gap > params.zero_tol:
+            is_significant_by_factor = gap_value > params.gap_factor * median_gap
+        
         is_significant_by_absolute = gap_value > params.alpha * lambda_max if lambda_max > 0 else False
         
         is_significant = is_significant_by_factor or is_significant_by_absolute
-        gap_ratio = gap_value / median_gap if median_gap > 0 else 0.0
+        
+        # Вычисляем gap_ratio с защитой от деления на очень маленькие числа
+        if median_gap > params.zero_tol:
+            gap_ratio = gap_value / median_gap
+            # Ограничиваем разумным максимумом для читаемости (например, 1000)
+            # Но сохраняем оригинальное значение для логики
+            gap_ratio_display = min(gap_ratio, 1000.0) if gap_ratio < float('inf') else 1000.0
+        else:
+            gap_ratio = 0.0
+            gap_ratio_display = 0.0
         
         result.append(EigengapDTO(
             index=i,
             gap_value=gap_value,
             is_significant=is_significant,
-            gap_ratio_to_median=gap_ratio
+            gap_ratio_to_median=gap_ratio_display  # Используем ограниченное значение для отображения
         ))
     
     return result
