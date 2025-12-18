@@ -6,7 +6,7 @@ from typing import Any, Optional, List
 from io import BytesIO
 import numpy as np
 from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, Alignment
 
 from src.domain.clusterizer.entities.graph import Graph, GraphNode, GraphLink
@@ -26,6 +26,11 @@ from src.application.analysis.dto.analysis_dto import (
     LibraryOptimalClusterResponseDTO,
     LibraryMetricDTO
 )
+from src.application.analysis.dto.laplacian_analysis_dto import (
+    LaplacianAnalysisParamsDTO,
+    LaplacianAnalysisResponseDTO
+)
+from src.application.analysis.services.laplacian_analyzer import LaplacianAnalyzer
 from src.application.clusterizer.dto.graph_dto import NodeDTO, LinkDTO
 
 logger = logging.getLogger(__name__)
@@ -394,13 +399,159 @@ class AnalyzeGraphHandler:
         
         return excel_buffer.getvalue()
 
-    def get_eigenvalues(self, dto: AnalysisRequestDTO) -> EigenvaluesDTO | str:
+    def _parse_laplacian_matrix_from_excel(self, excel_bytes: bytes) -> tuple[List[List[float]], List[str]]:
+        """
+        Парсит Excel файл с матрицей Лапласа.
+        Возвращает матрицу и список id вершин.
+        Формат Excel: первая строка и первый столбец содержат id вершин, матрица начинается с B2.
+        """
+        wb = load_workbook(filename=BytesIO(excel_bytes), data_only=True)
+        ws = wb.active
+        
+        # Читаем id вершин из первой строки (начиная с B1, пропуская A1)
+        node_ids = []
+        col = 2
+        while True:
+            cell_value = ws.cell(row=1, column=col).value
+            if cell_value is None or cell_value == "":
+                break
+            node_ids.append(str(cell_value))
+            col += 1
+        
+        if not node_ids:
+            raise ValueError("Не удалось прочитать id вершин из Excel файла")
+        
+        # Проверяем, что количество строк соответствует количеству столбцов
+        # (первая строка - заголовки, остальные - данные)
+        expected_rows = len(node_ids) + 1  # +1 для заголовка
+        actual_rows = ws.max_row
+        
+        if actual_rows < expected_rows:
+            raise ValueError(f"Недостаточно строк в Excel файле. Ожидается {expected_rows}, найдено {actual_rows}")
+        
+        # Читаем матрицу (начиная с B2)
+        matrix = []
+        for row_idx in range(2, len(node_ids) + 2):
+            row = []
+            for col_idx in range(2, len(node_ids) + 2):
+                cell_value = ws.cell(row=row_idx, column=col_idx).value
+                if cell_value is None:
+                    cell_value = 0
+                try:
+                    row.append(float(cell_value))
+                except (ValueError, TypeError):
+                    raise ValueError(f"Некорректное значение в ячейке ({row_idx}, {col_idx}): {cell_value}")
+            matrix.append(row)
+        
+        # Проверяем, что матрица квадратная
+        if len(matrix) != len(node_ids):
+            raise ValueError(f"Матрица не является квадратной. Размер: {len(matrix)}x{len(matrix[0]) if matrix else 0}, ожидается {len(node_ids)}x{len(node_ids)}")
+        
+        for i, row in enumerate(matrix):
+            if len(row) != len(node_ids):
+                raise ValueError(f"Строка {i+2} имеет неправильную длину: {len(row)}, ожидается {len(node_ids)}")
+        
+        return matrix, node_ids
+    
+    def _validate_laplacian_matrix(self, matrix: List[List[float]]) -> None:
+        """
+        Проверяет, что матрица является корректной матрицей Лапласа:
+        - Симметричная
+        - Сумма всех элементов равна 0
+        """
+        import numpy as np
+        np_matrix = np.array(matrix)
+        
+        # Проверка симметричности
+        if not np.allclose(np_matrix, np_matrix.T, rtol=1e-5):
+            raise ValueError("Матрица не является симметричной")
+        
+        # Проверка суммы элементов
+        total_sum = np.sum(np_matrix)
+        if not np.isclose(total_sum, 0.0, rtol=1e-5):
+            raise ValueError(f"Сумма всех элементов матрицы должна быть равна 0, получено: {total_sum}")
+
+    def get_eigenvalues(self, dto: AnalysisRequestDTO) -> EigenvaluesDTO | str | bytes:
+        """
+        Получает собственные числа из матрицы Лапласа в Excel файле.
+        Если async_mode=True, возвращает task_id (str).
+        Иначе возвращает Excel файл в виде bytes.
+        """
         if dto.async_mode:
             return self._handle_async(dto, 'eigenvalues')
 
-        graph = self._create_graph(dto)
-        values = self.analysis_service.get_eigenvalues(graph)
-        return EigenvaluesDTO(values=values)
+        # Если передан граф (старый способ), используем его
+        if hasattr(dto, 'graph') and dto.graph:
+            graph = self._create_graph(dto)
+            values = self.analysis_service.get_eigenvalues(graph)
+            return EigenvaluesDTO(values=values)
+        
+        # Новый способ: парсим Excel файл
+        # Это будет обработано в контроллере, здесь возвращаем ошибку
+        raise ValueError("Для вычисления собственных чисел требуется Excel файл с матрицей Лапласа")
+    
+    def get_eigenvalues_from_excel(self, excel_bytes: bytes, sort: str = "-") -> bytes:
+        """
+        Вычисляет собственные числа из Excel файла с матрицей Лапласа.
+        
+        Параметры:
+        - sort: режим сортировки ("-" для убывания, "+" для возрастания). По умолчанию "-".
+        """
+        # Парсим Excel файл
+        matrix, node_ids = self._parse_laplacian_matrix_from_excel(excel_bytes)
+        
+        # Проверяем матрицу
+        self._validate_laplacian_matrix(matrix)
+        
+        # Вычисляем собственные числа
+        import numpy as np
+        np_matrix = np.array(matrix, dtype=float)
+        
+        # Вычисляем все собственные числа
+        eigenvalues = np.linalg.eigvalsh(np_matrix)
+        eigenvalues = eigenvalues.tolist()
+        
+        # Сортируем в зависимости от параметра sort
+        if sort == "-":
+            # По убыванию
+            eigenvalues = sorted(eigenvalues, reverse=True)
+        elif sort == "+":
+            # По возрастанию
+            eigenvalues = sorted(eigenvalues, reverse=False)
+        else:
+            # По умолчанию по убыванию
+            eigenvalues = sorted(eigenvalues, reverse=True)
+        
+        # Создаем Excel файл с результатами
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Eigenvalues"
+        
+        # Стили для заголовков
+        header_font = Font(bold=True)
+        header_alignment = Alignment(horizontal='center', vertical='center')
+        
+        # Заголовки
+        ws.cell(row=1, column=1, value="Index").font = header_font
+        ws.cell(row=1, column=1).alignment = header_alignment
+        ws.cell(row=1, column=2, value="Eigenvalue").font = header_font
+        ws.cell(row=1, column=2).alignment = header_alignment
+        
+        # Заполняем собственные числа
+        for i, value in enumerate(eigenvalues, start=2):
+            ws.cell(row=i, column=1, value=i - 1)  # Index (начиная с 1)
+            ws.cell(row=i, column=2, value=value)
+        
+        # Автоматически подгоняем ширину столбцов
+        ws.column_dimensions['A'].width = 10
+        ws.column_dimensions['B'].width = 15
+        
+        # Сохраняем в BytesIO
+        excel_buffer = BytesIO()
+        wb.save(excel_buffer)
+        excel_buffer.seek(0)
+        
+        return excel_buffer.getvalue()
 
     def get_chromatic_number(self, dto: AnalysisRequestDTO) -> ChromaticNumberDTO | str:
         if dto.async_mode:
@@ -417,4 +568,30 @@ class AnalyzeGraphHandler:
         graph = self._create_graph(dto)
         stats = self.analysis_service.get_basic_stats(graph)
         return GraphStatsDTO(stats=stats)
+
+    def analyze_laplacian_from_excel(
+        self,
+        excel_bytes: bytes,
+        params: LaplacianAnalysisParamsDTO
+    ) -> LaplacianAnalysisResponseDTO:
+        """
+        Выполняет полный анализ матрицы Лапласа из Excel файла.
+        
+        Параметры:
+        - excel_bytes: содержимое Excel файла с матрицей Лапласа
+        - params: параметры анализа (пороги, коэффициенты)
+        
+        Возвращает полный отчёт анализа.
+        """
+        # Парсим Excel файл
+        matrix, node_ids = self._parse_laplacian_matrix_from_excel(excel_bytes)
+        
+        # Конвертируем в numpy array
+        np_matrix = np.array(matrix, dtype=float)
+        
+        # Создаём анализатор и выполняем анализ
+        analyzer = LaplacianAnalyzer(params)
+        result = analyzer.analyze(np_matrix)
+        
+        return result
 

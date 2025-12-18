@@ -2,8 +2,9 @@ from __future__ import annotations
 import json
 import time
 import logging
+from pathlib import Path
 from fastapi import APIRouter, status, HTTPException, File, UploadFile, Form
-from fastapi.responses import Response
+from fastapi.responses import Response, FileResponse
 from typing import Union, Optional
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,10 @@ from src.application.analysis.dto.analysis_dto import (
     OptimalClusterRequestDTO,
     OptimalClusterResponseDTO,
     LibraryOptimalClusterResponseDTO
+)
+from src.application.analysis.dto.laplacian_analysis_dto import (
+    LaplacianAnalysisParamsDTO,
+    LaplacianAnalysisResponseDTO
 )
 
 def create_analysis_router(
@@ -282,21 +287,212 @@ def create_analysis_router(
 
     @router.post(
         "/eigenvalues",
-        response_model=Union[EigenvaluesDTO, str],
         status_code=status.HTTP_200_OK
     )
     async def get_eigenvalues(
-        file: Optional[UploadFile] = File(None),
-        graph_json: Optional[str] = Form(None),
-        async_mode: Optional[bool] = Form(None)
+        laplacian_matrix_file: Optional[UploadFile] = File(None),
+        async_mode: Optional[bool] = Form(False),
+        sort: Optional[str] = Form("-")
     ):
-        """Получить собственные числа графа (спектр)."""
+        """
+        Получить собственные числа из матрицы Лапласа в формате Excel.
+        Принимает xlsx файл с матрицей Лапласа (результат /analysis/laplacian-matrix).
+        Возвращает xlsx файл с собственными числами.
+        Перед вычислением проверяет, что матрица симметричная и сумма всех элементов равна 0.
+        
+        Параметры:
+        - sort: режим сортировки ("-" для убывания, "+" для возрастания). По умолчанию "-".
+        """
         try:
-            dto = await _parse_request(file, graph_json, async_mode)
-            return analysis_handler.get_eigenvalues(dto)
+            if async_mode:
+                # Для async режима используем старый способ с графом
+                # Но это не поддерживается для Excel файлов
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Async режим не поддерживается для Excel файлов"
+                )
+            
+            if laplacian_matrix_file is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Необходимо передать xlsx файл с матрицей Лапласа"
+                )
+            
+            # Проверяем тип файла
+            if not laplacian_matrix_file.filename.endswith('.xlsx'):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Файл должен быть в формате .xlsx"
+                )
+            
+            # Проверяем параметр сортировки
+            if sort not in ["-", "+"]:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Параметр sort должен быть '-' (убывание) или '+' (возрастание)"
+                )
+            
+            # Читаем содержимое файла
+            excel_bytes = await laplacian_matrix_file.read()
+            
+            # Вычисляем собственные числа
+            result = analysis_handler.get_eigenvalues_from_excel(excel_bytes, sort=sort)
+            
+            # Возвращаем Excel файл
+            return Response(
+                content=result,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={
+                    "Content-Disposition": "attachment; filename=eigenvalues.xlsx"
+                }
+            )
+        except HTTPException:
+            raise
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except Exception as e:
+            logger.error(f"Error computing eigenvalues: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @router.get(
+        "/laplacian-analysis/algorithm",
+        status_code=status.HTTP_200_OK
+    )
+    def get_laplacian_analysis_algorithm():
+        """
+        Скачать описание алгоритма анализа матрицы Лапласа.
+        
+        Возвращает markdown файл с подробным описанием алгоритма, включая:
+        - Этапы обработки матрицы
+        - Вычисляемые константы
+        - Методы оценок
+        - Интерпретацию результатов
+        - Рекомендации по использованию
+        """
+        try:
+            # Путь к файлу с описанием алгоритма
+            algorithm_file = Path(__file__).parent.parent.parent.parent / "docs" / "laplacian_analysis_algorithm.md"
+            
+            if not algorithm_file.exists():
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Файл с описанием алгоритма не найден"
+                )
+            
+            return FileResponse(
+                path=str(algorithm_file),
+                media_type="text/markdown",
+                filename="laplacian_analysis_algorithm.md",
+                headers={
+                    "Content-Disposition": "attachment; filename=laplacian_analysis_algorithm.md"
+                }
+            )
         except HTTPException:
             raise
         except Exception as e:
+            logger.error(f"Error serving algorithm file: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @router.post(
+        "/laplacian-analysis",
+        response_model=LaplacianAnalysisResponseDTO,
+        status_code=status.HTTP_200_OK
+    )
+    async def analyze_laplacian(
+        laplacian_matrix_file: UploadFile = File(...),
+        async_mode: Optional[bool] = Form(False),
+        zero_tol: Optional[float] = Form(1e-8),
+        T_low_abs: Optional[float] = Form(2.0),
+        alpha: Optional[float] = Form(0.02),
+        gap_factor: Optional[float] = Form(3.0),
+        gap_ratio: Optional[float] = Form(1.5),
+        frac_many_thresh: Optional[float] = Form(0.2),
+        k_search_fraction: Optional[float] = Form(0.5),
+        max_k_search: Optional[int] = Form(50)
+    ):
+        """
+        Выполняет полный анализ матрицы Лапласа по спектральным характеристикам.
+        
+        Принимает xlsx файл с матрицей Лапласа и возвращает:
+        - Вычисленные константы (N, λ_max, λ_2, n_zero, eigengaps и т.д.)
+        - Оценку связности графа
+        - Оценку низкочастотной части спектра
+        - Оценку локализации собственных векторов
+        - Кандидатов для количества кластеров k
+        - Рекомендации по дальнейшему анализу
+        
+        **Описание алгоритма**: Для получения подробного описания алгоритма скачайте файл по адресу: `GET /analysis/laplacian-analysis/algorithm`
+        
+        Параметры:
+        - zero_tol: допустимая погрешность для определения нуля (default: 1e-8)
+        - T_low_abs: абсолютный порог низкой частоты (default: 2.0)
+        - alpha: коэффициент для T_low_rel = alpha * lambda_max (default: 0.02)
+        - gap_factor: множитель для определения значимого eigengap (default: 3.0)
+        - gap_ratio: соотношение для значимости eigengap (default: 1.5)
+        - frac_many_thresh: порог доли малых λ для оценки 'много' (default: 0.2)
+        - k_search_fraction: доля спектра для поиска eigengaps (default: 0.5)
+        - max_k_search: максимальное количество eigengaps для поиска (default: 50)
+        """
+        request_start_time = time.time()
+        try:
+            if async_mode:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Async режим не поддерживается для анализа Лапласа"
+                )
+            
+            if laplacian_matrix_file is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Необходимо передать xlsx файл с матрицей Лапласа"
+                )
+            
+            # Проверяем тип файла
+            if not laplacian_matrix_file.filename.endswith('.xlsx'):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Файл должен быть в формате .xlsx"
+                )
+            
+            # Формируем параметры анализа
+            params = LaplacianAnalysisParamsDTO(
+                zero_tol=zero_tol,
+                T_low_abs=T_low_abs,
+                alpha=alpha,
+                gap_factor=gap_factor,
+                gap_ratio=gap_ratio,
+                frac_many_thresh=frac_many_thresh,
+                k_search_fraction=k_search_fraction,
+                max_k_search=max_k_search
+            )
+            
+            logger.info(f"Received laplacian analysis request with params: {params}")
+            
+            # Читаем содержимое файла
+            excel_bytes = await laplacian_matrix_file.read()
+            
+            # Выполняем анализ
+            result = analysis_handler.analyze_laplacian_from_excel(excel_bytes, params)
+            
+            request_time = time.time() - request_start_time
+            logger.info(
+                f"Laplacian analysis completed | "
+                f"N={result.computed_constants.N} | "
+                f"k_candidates={[k.k for k in result.k_candidates]} | "
+                f"Request time: {request_time:.2f}s"
+            )
+            
+            return result
+            
+        except HTTPException:
+            raise
+        except ValueError as e:
+            request_time = time.time() - request_start_time
+            logger.warning(f"Laplacian analysis validation error after {request_time:.2f}s: {str(e)}")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except Exception as e:
+            request_time = time.time() - request_start_time
+            logger.error(f"Laplacian analysis error after {request_time:.2f}s: {str(e)}")
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.post(
