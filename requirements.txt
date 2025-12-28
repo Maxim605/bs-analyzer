@@ -13,3 +13,4 @@ python-dotenv
 thriftpy2
 python-arango
 openpyxl
+python-multipart
