@@ -1,0 +1,26 @@
+services:
+  bs-analyzer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bs-analyzer
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:${PORT:-8000}"
+    environment:
+      - PORT=${PORT:-8000}
+      - THRIFT_HOST=${THRIFT_HOST:-host.docker.internal}
+      - THRIFT_PORT=${THRIFT_PORT:-9090}
+      - ARANGO_URL=${ARANGO_URL:-http://host.docker.internal:8529}
+      - ARANGO_DATABASE=${ARANGO_DATABASE:-_system}
+      - ARANGO_USERNAME=${ARANGO_USERNAME:-root}
+      - ARANGO_PASSWORD=${ARANGO_PASSWORD:-}
+      - USERS_COLLECTION=${USERS_COLLECTION:-users}
+      - BATCH_SIZE=${BATCH_SIZE:-100}
+      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-8}
+      - MKL_NUM_THREADS=${MKL_NUM_THREADS:-8}
+      - NUMEXPR_NUM_THREADS=${NUMEXPR_NUM_THREADS:-8}
+      - OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-8}
+    env_file:
+      - path: .env
+        required: false
