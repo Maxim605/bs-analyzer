@@ -1,6 +1,7 @@
 from __future__ import annotations
 from fastapi import APIRouter
 
+from src.infrastructure.config import config
 from src.infrastructure.clusterizer.redis.redis_manager import RedisTaskManager
 from src.infrastructure.analysis.services.networkx_analysis import NetworkXGraphAnalysisService
 from src.infrastructure.clusterizer.services.sklearn_clustering import SklearnSpectralClusteringStrategy
@@ -12,7 +13,7 @@ def build_analysis_module() -> APIRouter:
     Сборка модуля Analysis (Composition Root).
     """
     # 1. Infrastructure
-    redis_manager = RedisTaskManager(host='localhost', port=6379)
+    redis_manager = RedisTaskManager(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_DB)
     analysis_service = NetworkXGraphAnalysisService()
     clustering_strategy = SklearnSpectralClusteringStrategy()
 

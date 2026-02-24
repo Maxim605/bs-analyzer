@@ -36,6 +36,11 @@ class Config:
     # Users collection
     USERS_COLLECTION: str = os.getenv("USERS_COLLECTION", "users")
     
+    # Redis настройки
+    REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
+    REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
+    REDIS_DB: int = int(os.getenv("REDIS_DB", "0"))
+    
     # Batch size
     BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "100"))
 

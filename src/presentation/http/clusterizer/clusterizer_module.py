@@ -1,6 +1,7 @@
 from __future__ import annotations
 from fastapi import APIRouter
 
+from src.infrastructure.config import config
 from src.infrastructure.clusterizer.services.sklearn_clustering import SklearnSpectralClusteringStrategy
 from src.infrastructure.clusterizer.redis.redis_manager import RedisTaskManager
 from src.application.clusterizer.commands.cluster_graph import ClusterGraphHandler
@@ -12,8 +13,7 @@ def build_clusterizer_module() -> APIRouter:
     Инициализация зависимостей и инъекция.
     """
     # 1. Infrastructure
-    # В продакшене параметры Redis стоило бы брать из конфига/env
-    redis_manager = RedisTaskManager(host='localhost', port=6379) 
+    redis_manager = RedisTaskManager(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_DB) 
     clustering_strategy = SklearnSpectralClusteringStrategy()
 
     # 2. Application
